@@ -1,4 +1,4 @@
-export AUTOSWITCH_CENV_VERSION='0.3.4'
+export AUTOSWITCH_CENV_VERSION='0.3.5'
 
 if ! type conda > /dev/null; then
     export DISABLE_AUTOSWITCH_CENV="1"
@@ -31,6 +31,56 @@ function _maybeactivate() {
   fi
 }
 
+# Activate venv and deactivate conda if active
+function _activate_venv() {
+  local venv_path=$1
+  # Deactivate conda if active
+  if [[ -n "$CONDA_DEFAULT_ENV" ]]; then
+    conda deactivate
+  fi
+  # Deactivate existing venv if different
+  if [[ -n "$VIRTUAL_ENV" && "$VIRTUAL_ENV" != "$venv_path" ]]; then
+    deactivate 2>/dev/null
+  fi
+  # Activate new venv if not already active
+  if [[ "$VIRTUAL_ENV" != "$venv_path" ]]; then
+    if [ -z "$AUTOSWITCH_SILENT" ]; then
+      printf "Switching to venv: %s  " "$venv_path"
+    fi
+    source "${venv_path}/bin/activate"
+    if [ -z "$AUTOSWITCH_SILENT" ]; then
+      printf "[%s]\n" "$(python --version 2>&1)"
+    fi
+  fi
+}
+
+# Deactivate venv and return to conda base
+function _deactivate_venv() {
+  if [[ -n "$VIRTUAL_ENV" ]]; then
+    if [ -z "$AUTOSWITCH_SILENT" ]; then
+      printf "Deactivating venv, switching to conda base\n"
+    fi
+    deactivate 2>/dev/null
+    conda activate base
+  fi
+}
+
+# Gives the path to the nearest parent .venv directory or nothing if it gets to root
+function _check_venv_path()
+{
+    local check_dir=$1
+
+    if [[ -d "${check_dir}/.venv" && -f "${check_dir}/.venv/bin/activate" ]]; then
+        printf "${check_dir}/.venv"
+        return
+    else
+        if [ "$check_dir" = "/" ]; then
+            return
+        fi
+        _check_venv_path "$(dirname "$check_dir")"
+    fi
+}
+
 
 # Gives the path to the nearest parent .cenv file or nothing if it gets to root
 function _check_cenv_path()
@@ -50,6 +100,7 @@ function _check_cenv_path()
 
 
 # Automatically switch conda environment when .cenv file detected
+# .venv takes priority over .cenv
 function check_cenv()
 {
     if [ "AS_CENV:$PWD" != "$MYOLDPWD" ]; then
@@ -58,6 +109,18 @@ function check_cenv()
         # (Since zsh-autoswitch-virtualenv use "AS:" prefix, we instead use "AS_CENV:"
         # See https://github.com/MichaelAquilina/zsh-autoswitch-virtualenv/issues/19
         MYOLDPWD="AS_CENV:$PWD"
+
+        # Check for .venv first (takes priority over .cenv)
+        venv_path=$(_check_venv_path "$PWD")
+        if [[ -n "$venv_path" ]]; then
+          _activate_venv "$venv_path"
+          return
+        fi
+
+        # If we were in a venv but no longer, deactivate and return to conda base
+        if [[ -n "$VIRTUAL_ENV" ]]; then
+          _deactivate_venv
+        fi
 
         SWITCH_TO=""
 
